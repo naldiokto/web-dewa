@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Navbar from './components/Navbar';
 import StatsCards from './components/StatsCards';
 import CctvViewer from './components/CctvViewer';
@@ -21,6 +21,18 @@ export default function App() {
   const [espOnline, setEspOnline] = useState(false);
   const [streamUrl, setStreamUrl] = useState(() => localStorage.getItem('dewa_stream_url') || '');
   const [cameraSource, setCameraSource] = useState('webcam'); // 'webcam' | 'esp32' | 'simulator'
+
+  // Ref wrappers to avoid stale closure in real-time detection loops
+  const faceDetectedRef = useRef(false);
+  const modeRef = useRef('auto');
+
+  useEffect(() => {
+    faceDetectedRef.current = faceDetected;
+  }, [faceDetected]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   // UI state
   const [firebaseConnected, setFirebaseConnected] = useState(false);
@@ -145,13 +157,16 @@ export default function App() {
 
   // Automated Real-time Face Detection Handler from Webcam
   const handleWebcamFaceChange = async (detected) => {
-    // Only react if state actually changes
-    if (detected && !faceDetected) {
+    const isCurrentlyDetected = faceDetectedRef.current;
+    const currentMode = modeRef.current;
+
+    if (detected && !isCurrentlyDetected) {
+      faceDetectedRef.current = true;
       const nowTime = new Date().toLocaleTimeString('id-ID');
       setFaceDetected(true);
       setLastFaceSeen(nowTime);
 
-      if (mode === 'auto') {
+      if (currentMode === 'auto') {
         setPower(true);
         addLog('👤 Wajah terdeteksi di Webcam Laptop! Kipas otomatis MENYALA (Auto Mode).', 'success');
         await updateFanState({
@@ -166,10 +181,11 @@ export default function App() {
           lastFaceSeen: nowTime
         });
       }
-    } else if (!detected && faceDetected) {
+    } else if (!detected && isCurrentlyDetected) {
+      faceDetectedRef.current = false;
       setFaceDetected(false);
 
-      if (mode === 'auto') {
+      if (currentMode === 'auto') {
         setPower(false);
         addLog('🚫 Wajah tidak terlihat di Webcam Laptop. Kipas otomatis DIMATIKAN untuk hemat energi.', 'danger');
         await updateFanState({

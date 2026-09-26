@@ -44,6 +44,8 @@ export default function CctvViewer({
   const [webcamError, setWebcamError] = useState(null);
   const [localDetectedBox, setLocalDetectedBox] = useState(null);
   const [detectionEngine, setDetectionEngine] = useState('');
+  const [sensitivityMode, setSensitivityMode] = useState('high'); // 'high' | 'normal'
+  const [confidenceScore, setConfidenceScore] = useState(0);
 
   const containerRef = useRef(null);
   const videoRef = useRef(null);
@@ -137,28 +139,31 @@ export default function CctvViewer({
 
       const result = await detectFace(
         videoRef.current, 
-        offscreenCanvasRef.current
+        offscreenCanvasRef.current,
+        { sensitivity: sensitivityMode }
       );
 
       if (result.method) setDetectionEngine(result.method);
 
       if (result.detected) {
         absentCountRef.current = 0;
+        setConfidenceScore(result.confidence || 90);
         setLocalDetectedBox(result.box);
         if (onWebcamFaceChange) {
           onWebcamFaceChange(true);
         }
       } else {
         absentCountRef.current += 1;
-        // Require 3 consecutive non-detections (~600ms) to prevent flicker
-        if (absentCountRef.current >= 3) {
+        // Require 4 consecutive non-detections (~800ms) to prevent flicker
+        if (absentCountRef.current >= 4) {
+          setConfidenceScore(0);
           setLocalDetectedBox(null);
           if (onWebcamFaceChange) {
             onWebcamFaceChange(false);
           }
         }
       }
-    }, 200);
+    }, 180);
   };
 
   const handleSwitchSource = (newSource) => {
@@ -333,11 +338,46 @@ export default function CctvViewer({
           </span>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2">
           {cameraSource === 'webcam' && (
-            <span className="text-teal-400">
-              AI Face Engine: {detectionEngine === 'native-api' ? 'Hardware Native' : 'Canvas CV'}
-            </span>
+            <>
+              {/* Sensitivity Selector */}
+              <div className="flex items-center gap-1 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 text-[10px]">
+                <span className="text-slate-400">Sensitivitas:</span>
+                <button
+                  type="button"
+                  onClick={() => setSensitivityMode(sensitivityMode === 'high' ? 'normal' : 'high')}
+                  className={`px-1.5 py-0.2 rounded font-bold transition-colors ${
+                    sensitivityMode === 'high' 
+                      ? 'bg-teal-500 text-slate-950' 
+                      : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  {sensitivityMode === 'high' ? 'Tinggi (Rekomendasi)' : 'Normal'}
+                </button>
+              </div>
+
+              {/* Force Test Trigger Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  const nextState = !faceDetected;
+                  if (onWebcamFaceChange) onWebcamFaceChange(nextState);
+                }}
+                className={`px-2 py-0.5 rounded font-bold border transition-all flex items-center gap-1 ${
+                  faceDetected 
+                    ? 'bg-rose-500/20 border-rose-500/40 text-rose-300 hover:bg-rose-500/30' 
+                    : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
+                }`}
+              >
+                <span>⚡</span>
+                <span>{faceDetected ? 'Lepas Wajah' : 'Kunci Wajah'}</span>
+              </button>
+
+              <span className="text-teal-400 hidden lg:inline">
+                {detectionEngine === 'native-api' ? 'Native API' : 'YCbCr Cluster'}
+              </span>
+            </>
           )}
           {cameraSource === 'esp32' && (
             <span>IP Stream: {streamUrl || 'Belum Dikonfigurasi'}</span>
@@ -479,32 +519,57 @@ export default function CctvViewer({
               </div>
             </div>
 
-            {/* Center Face Target Bounding Box */}
-            <div className="relative flex items-center justify-center">
-              <div className={`relative w-44 h-48 sm:w-56 sm:h-60 rounded-xl border-2 transition-all duration-300 flex items-center justify-center ${
-                faceDetected 
-                  ? 'border-emerald-400 shadow-[0_0_35px_rgba(52,211,153,0.6)] bg-emerald-500/10' 
-                  : 'border-slate-600/50 border-dashed'
-              }`}>
+            {/* Dynamic Face Target Bounding Box */}
+            {faceDetected && localDetectedBox ? (
+              <div 
+                className="absolute rounded-xl border-2 border-emerald-400 shadow-[0_0_35px_rgba(52,211,153,0.6)] bg-emerald-500/15 flex items-center justify-center transition-all duration-150 pointer-events-none"
+                style={{
+                  left: `${localDetectedBox.xPercent}%`,
+                  top: `${localDetectedBox.yPercent}%`,
+                  width: `${localDetectedBox.wPercent}%`,
+                  height: `${localDetectedBox.hPercent}%`
+                }}
+              >
                 {/* Corner reticles */}
                 <div className="absolute -top-1 -left-1 w-3.5 h-3.5 border-t-2 border-l-2 border-teal-300" />
                 <div className="absolute -top-1 -right-1 w-3.5 h-3.5 border-t-2 border-r-2 border-teal-300" />
                 <div className="absolute -bottom-1 -left-1 w-3.5 h-3.5 border-b-2 border-l-2 border-teal-300" />
                 <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 border-b-2 border-r-2 border-teal-300" />
 
-                {faceDetected ? (
-                  <div className="bg-emerald-500/30 backdrop-blur-md border border-emerald-400/60 text-emerald-300 px-3.5 py-1.5 rounded-full text-xs font-extrabold tracking-wide flex items-center gap-2 animate-bounce shadow-lg">
+                <div className="bg-emerald-500/90 backdrop-blur-md text-slate-950 px-3 py-1 rounded-full text-[11px] font-extrabold tracking-wide flex items-center gap-1.5 shadow-xl animate-pulse">
+                  <ScanFace className="w-3.5 h-3.5" />
+                  <span>TARGET LOCKED ({confidenceScore}%)</span>
+                </div>
+              </div>
+            ) : faceDetected ? (
+              /* Face detected fallback box */
+              <div className="relative flex items-center justify-center">
+                <div className="w-48 h-52 sm:w-60 sm:h-64 rounded-xl border-2 border-emerald-400 shadow-[0_0_35px_rgba(52,211,153,0.6)] bg-emerald-500/15 flex items-center justify-center transition-all duration-300">
+                  <div className="absolute -top-1 -left-1 w-3.5 h-3.5 border-t-2 border-l-2 border-teal-300" />
+                  <div className="absolute -top-1 -right-1 w-3.5 h-3.5 border-t-2 border-r-2 border-teal-300" />
+                  <div className="absolute -bottom-1 -left-1 w-3.5 h-3.5 border-b-2 border-l-2 border-teal-300" />
+                  <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 border-b-2 border-r-2 border-teal-300" />
+                  <div className="bg-emerald-500/90 text-slate-950 px-3.5 py-1.5 rounded-full text-xs font-extrabold flex items-center gap-2 shadow-lg animate-bounce">
                     <ScanFace className="w-4 h-4" />
-                    <span>TARGET LOCKED: WAJAH TERDETEKSI</span>
+                    <span>WAJAH TERDETEKSI (KIPAS AKTIF)</span>
                   </div>
-                ) : (
-                  <div className="text-slate-400 text-xs font-mono flex items-center gap-1.5 bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm">
-                    <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-pulse"></span>
+                </div>
+              </div>
+            ) : (
+              /* Idle Searching Box */
+              <div className="relative flex items-center justify-center">
+                <div className="w-48 h-52 sm:w-56 sm:h-60 rounded-xl border-2 border-slate-600/50 border-dashed flex items-center justify-center">
+                  <div className="absolute -top-1 -left-1 w-3.5 h-3.5 border-t-2 border-l-2 border-teal-300/40" />
+                  <div className="absolute -top-1 -right-1 w-3.5 h-3.5 border-t-2 border-r-2 border-teal-300/40" />
+                  <div className="absolute -bottom-1 -left-1 w-3.5 h-3.5 border-b-2 border-l-2 border-teal-300/40" />
+                  <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 border-b-2 border-r-2 border-teal-300/40" />
+                  <div className="text-slate-400 text-xs font-mono flex items-center gap-1.5 bg-black/60 px-3.5 py-1.5 rounded-full backdrop-blur-sm">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
                     <span>Mencari Target Wajah...</span>
                   </div>
-                )}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Bottom HUD info */}
             <div className="flex items-center justify-between text-[11px] font-mono">
