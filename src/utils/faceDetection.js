@@ -150,53 +150,43 @@ export async function detectFaces(video, offscreenCanvas, options = {}) {
     let minY = sampleH;
     let maxY = 0;
 
-    // Find face bounding box by scanning from the head downwards
-    // (A human face oval has aspect ratio Height ≈ Width * 1.25)
-    let upperCount = 0;
-    let upperSumX = 0;
-    let upperMinX = reg.endX;
-    let upperMaxX = reg.startX;
-
-    // First scan the top 35px of the cluster (strictly head/face level, ignoring uniform shirts)
-    const scanLimitY = Math.min(sampleH - 2, minY + 32);
-    for (let y = minY; y <= scanLimitY; y += 2) {
+    // 1. Scan the region to find person boundaries and head position (minY)
+    for (let y = 4; y < sampleH - 4; y += 2) {
       for (let x = reg.startX; x <= reg.endX; x += 2) {
         if (skinGrid[y * sampleW + x] === 1) {
           count++;
-          upperCount++;
-          upperSumX += x;
           sumX += x;
           sumY += y;
 
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
-          if (x < upperMinX) upperMinX = x;
-          if (x > upperMaxX) upperMaxX = x;
           if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
         }
       }
     }
 
-    if (count >= minPixelsPerFace && upperCount >= 10) {
-      const faceCenterX = upperSumX / upperCount;
+    // 2. If valid person detected, create a tight face box (forehead to chin, ignoring uniform shirt)
+    if (count >= minPixelsPerFace && minY < sampleH - 10) {
+      const faceCenterX = sumX / count;
 
-      // Tight face width: cheek to cheek (clamped to realistic human facial dimensions)
-      const measuredW = (upperMaxX - upperMinX);
-      const faceW = Math.max(14, Math.min(30, measuredW * 1.08));
+      // Realistic face width (cheek to cheek)
+      const measuredW = maxX - minX;
+      const faceW = Math.max(16, Math.min(30, measuredW * 0.92));
 
-      // Golden ratio face oval: height is strictly 1.25 to 1.30 of width (forehead to chin)
-      const faceH = faceW * 1.26;
+      // Golden ratio human face height (forehead to chin = 1.25x width)
+      const faceH = faceW * 1.25;
 
-      // Position top slightly above eyebrows to include forehead
+      // Face top starts at the detected top of head/forehead (minY)
+      const top = Math.max(1, Math.min(sampleH - faceH - 1, minY));
       const left = Math.max(1, Math.min(sampleW - faceW - 1, faceCenterX - faceW / 2));
-      const top = Math.max(1, Math.min(sampleH - faceH - 1, minY - 1));
 
       const xPercent = (left / sampleW) * 100;
       const yPercent = (top / sampleH) * 100;
       const wPercent = (faceW / sampleW) * 100;
       const hPercent = (faceH / sampleH) * 100;
 
-      const confidence = Math.min(99, Math.round(75 + (upperCount / 80) * 24));
+      const confidence = Math.min(99, Math.round(80 + (count / 120) * 19));
 
       detectedFaces.push({
         id: index + 1,
