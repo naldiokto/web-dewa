@@ -1,73 +1,73 @@
 /**
- * Ultra-robust Face and Human Presence Detection for Webcam Demo
- * Uses YCbCr Universal Skin Chrominance Clustering (invariant to lighting & ethnicity)
- * Scans full frame, identifies dominant facial cluster, and calculates dynamic coordinates.
+ * Multi-Face Detection Engine for Webcam Demo
+ * Supports simultaneously tracking multiple faces / people in frame
+ * Uses YCbCr Universal Chrominance & Spatial Connected Clustering
  */
 
-/**
- * Check if RGB values correspond to human skin in YCbCr color space
- * Standard IEEE human skin model: Cb [75..135], Cr [128..178]
- */
 function isHumanSkin(r, g, b) {
   // YCbCr transformation
   const cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 128;
   const cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 128;
 
-  // Universal skin cluster boundaries (matches Asian, Indonesian, Caucasian, African)
-  const ycbcrMatch = cb >= 73 && cb <= 137 && cr >= 126 && cr <= 180;
-  
-  // Basic luminance validity
+  // Broad skin cluster boundaries (covers Asian, Indonesian, Caucasian, African)
+  const ycbcrMatch = cb >= 73 && cb <= 138 && cr >= 125 && cr <= 182;
   const rgbMatch = r > 40 && g > 25 && b > 15 && (r > b || Math.abs(r - b) < 25);
 
   return ycbcrMatch && rgbMatch;
 }
 
 /**
- * Detect face from HTML5 Video element
+ * Detect ALL faces in video frame
  * @param {HTMLVideoElement} video 
  * @param {HTMLCanvasElement} offscreenCanvas 
  * @param {Object} options
- * @returns {Promise<{ detected: boolean, confidence: number, box: { xPercent: number, yPercent: number, wPercent: number, hPercent: number } | null, method: string }>}
+ * @returns {Promise<{ detected: boolean, facesCount: number, faces: Array<{ id: number, xPercent: number, yPercent: number, wPercent: number, hPercent: number, confidence: number }>, method: string }>}
  */
-export async function detectFace(video, offscreenCanvas, options = {}) {
+export async function detectFaces(video, offscreenCanvas, options = {}) {
   if (!video || video.readyState < 2 || video.paused || video.ended) {
-    return { detected: false, confidence: 0, box: null, method: 'idle' };
+    return { detected: false, facesCount: 0, faces: [], method: 'idle' };
   }
 
-  // 1. Try Native Browser FaceDetector if supported
+  // 1. Try Native Browser FaceDetector if supported (e.g. Chrome with experimental flags)
   if (typeof window !== 'undefined' && 'FaceDetector' in window) {
     try {
-      const nativeDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 2 });
-      const faces = await nativeDetector.detect(video);
-      if (faces && faces.length > 0) {
-        const bb = faces[0].boundingBox;
+      const nativeDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 10 });
+      const rawFaces = await nativeDetector.detect(video);
+      if (rawFaces && rawFaces.length > 0) {
         const vW = video.videoWidth || 640;
         const vH = video.videoHeight || 480;
 
+        const faces = rawFaces.map((f, i) => {
+          const bb = f.boundingBox;
+          return {
+            id: i + 1,
+            xPercent: Math.max(2, Math.min(95, (bb.x / vW) * 100)),
+            yPercent: Math.max(2, Math.min(95, (bb.y / vH) * 100)),
+            wPercent: Math.min(90, (bb.width / vW) * 100),
+            hPercent: Math.min(90, (bb.height / vH) * 100),
+            confidence: 96
+          };
+        });
+
         return {
           detected: true,
-          confidence: 95,
-          box: {
-            xPercent: Math.max(5, (bb.x / vW) * 100),
-            yPercent: Math.max(5, (bb.y / vH) * 100),
-            wPercent: Math.min(90, (bb.width / vW) * 100),
-            hPercent: Math.min(90, (bb.height / vH) * 100)
-          },
+          facesCount: faces.length,
+          faces,
           method: 'native-api'
         };
       }
     } catch (e) {
-      // Fall through to canvas detector
+      // Fall through to canvas multi-cluster detector
     }
   }
 
-  // 2. High-Precision Computer Vision (YCbCr + Cluster Centroid)
+  // 2. High-Precision Multi-Cluster Computer Vision Canvas Fallback
   if (!offscreenCanvas) {
-    return { detected: false, confidence: 0, box: null, method: 'none' };
+    return { detected: false, facesCount: 0, faces: [], method: 'none' };
   }
 
   const ctx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return { detected: false, confidence: 0, box: null, method: 'none' };
+  if (!ctx) return { detected: false, facesCount: 0, faces: [], method: 'none' };
 
   const sampleW = 120;
   const sampleH = 90;
@@ -79,19 +79,14 @@ export async function detectFace(video, offscreenCanvas, options = {}) {
   try {
     imgData = ctx.getImageData(0, 0, sampleW, sampleH);
   } catch (err) {
-    return { detected: false, confidence: 0, box: null, method: 'error' };
+    return { detected: false, facesCount: 0, faces: [], method: 'error' };
   }
 
   const data = imgData.data;
-  let totalSkinCount = 0;
-  let sumX = 0;
-  let sumY = 0;
-  let minX = sampleW;
-  let maxX = 0;
-  let minY = sampleH;
-  let maxY = 0;
+  const histX = new Int32Array(sampleW);
+  const skinGrid = new Uint8Array(sampleW * sampleH);
 
-  // Scan entire video frame with step = 2 for ultra-fast performance
+  // Scan frame and build horizontal spatial profile
   for (let y = 4; y < sampleH - 4; y += 2) {
     for (let x = 4; x < sampleW - 4; x += 2) {
       const idx = (y * sampleW + x) * 4;
@@ -100,57 +95,111 @@ export async function detectFace(video, offscreenCanvas, options = {}) {
       const b = data[idx + 2];
 
       if (isHumanSkin(r, g, b)) {
-        totalSkinCount++;
-        sumX += x;
-        sumY += y;
-
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
+        histX[x]++;
+        skinGrid[y * sampleW + x] = 1;
       }
     }
   }
 
-  // Calculate face cluster metrics
-  // In a 120x90 grid sampled every 2 pixels = 2,700 total sampled points.
-  // A face close up covers 40 to 600 points.
-  const sensitivityThreshold = options.sensitivity === 'high' ? 25 : 40;
+  // Segment horizontal profile into individual person clusters
+  // A valley (gap between two people) is where skin pixels drop below threshold
+  const peakThreshold = options.sensitivity === 'high' ? 2 : 4;
+  const regions = [];
+  let inRegion = false;
+  let regionStart = 0;
+  let valleyCount = 0;
 
-  if (totalSkinCount >= sensitivityThreshold) {
-    const avgX = sumX / totalSkinCount;
-    const avgY = sumY / totalSkinCount;
+  for (let x = 4; x < sampleW - 4; x++) {
+    if (histX[x] >= peakThreshold) {
+      if (!inRegion) {
+        inRegion = true;
+        regionStart = x;
+        valleyCount = 0;
+      } else {
+        valleyCount = 0;
+      }
+    } else {
+      if (inRegion) {
+        valleyCount++;
+        // If valley continues for 5 pixels, close this person's region
+        if (valleyCount >= 5 || x === sampleW - 5) {
+          inRegion = false;
+          const regionEnd = x - valleyCount;
+          if (regionEnd - regionStart >= 8) {
+            regions.push({ startX: regionStart, endX: regionEnd });
+          }
+        }
+      }
+    }
+  }
 
-    // Filter outliers: calculate cluster spread around centroid
-    const rawWidth = Math.min(sampleW * 0.7, Math.max(20, (maxX - minX) * 0.85));
-    const rawHeight = Math.min(sampleH * 0.8, Math.max(25, (maxY - minY) * 0.85));
+  if (inRegion) {
+    regions.push({ startX: regionStart, endX: sampleW - 5 });
+  }
 
-    // Centered around the person's face
-    const centerX = avgX;
-    const centerY = avgY;
+  // For each segmented region, calculate bounding box of the individual face
+  const detectedFaces = [];
+  const minPixelsPerFace = options.sensitivity === 'high' ? 18 : 25;
 
-    const left = Math.max(2, Math.min(sampleW - rawWidth - 2, centerX - rawWidth / 2));
-    const top = Math.max(2, Math.min(sampleH - rawHeight - 2, centerY - rawHeight / 2));
+  regions.forEach((reg, index) => {
+    let count = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let minX = reg.endX;
+    let maxX = reg.startX;
+    let minY = sampleH;
+    let maxY = 0;
 
-    const xPercent = (left / sampleW) * 100;
-    const yPercent = (top / sampleH) * 100;
-    const wPercent = (rawWidth / sampleW) * 100;
-    const hPercent = (rawHeight / sampleH) * 100;
+    for (let y = 4; y < sampleH - 4; y += 2) {
+      for (let x = reg.startX; x <= reg.endX; x += 2) {
+        if (skinGrid[y * sampleW + x] === 1) {
+          count++;
+          sumX += x;
+          sumY += y;
 
-    const confidence = Math.min(99, Math.round((totalSkinCount / 180) * 100));
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
 
-    return {
-      detected: true,
-      confidence,
-      box: {
+    if (count >= minPixelsPerFace) {
+      const avgX = sumX / count;
+      const avgY = sumY / count;
+
+      const rawW = Math.max(16, (maxX - minX) * 1.15);
+      const rawH = Math.max(22, (maxY - minY) * 1.15);
+
+      const left = Math.max(2, Math.min(sampleW - rawW - 2, avgX - rawW / 2));
+      const top = Math.max(2, Math.min(sampleH - rawH - 2, avgY - rawH / 2));
+
+      const xPercent = (left / sampleW) * 100;
+      const yPercent = (top / sampleH) * 100;
+      const wPercent = (rawW / sampleW) * 100;
+      const hPercent = (rawH / sampleH) * 100;
+
+      const confidence = Math.min(99, Math.round(50 + (count / 100) * 45));
+
+      detectedFaces.push({
+        id: index + 1,
         xPercent,
         yPercent,
         wPercent,
-        hPercent
-      },
-      method: 'ycbcr-cv'
-    };
-  }
+        hPercent,
+        confidence
+      });
+    }
+  });
 
-  return { detected: false, confidence: 0, box: null, method: 'ycbcr-cv' };
+  return {
+    detected: detectedFaces.length > 0,
+    facesCount: detectedFaces.length,
+    faces: detectedFaces,
+    method: 'multi-cluster-ycbcr'
+  };
 }
+
+// Backward-compatible alias
+export const detectFace = detectFaces;

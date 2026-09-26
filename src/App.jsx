@@ -156,7 +156,7 @@ export default function App() {
   };
 
   // Automated Real-time Face Detection Handler from Webcam
-  const handleWebcamFaceChange = async (detected) => {
+  const handleWebcamFaceChange = async (detected, facesCount = 1) => {
     const isCurrentlyDetected = faceDetectedRef.current;
     const currentMode = modeRef.current;
 
@@ -166,16 +166,20 @@ export default function App() {
       setFaceDetected(true);
       setLastFaceSeen(nowTime);
 
+      const msg = facesCount > 1 
+        ? `👥 ${facesCount} Wajah terdeteksi di kamera! Kipas otomatis MENYALA (Auto Mode).` 
+        : '👤 1 Wajah terdeteksi di kamera! Kipas otomatis MENYALA (Auto Mode).';
+
       if (currentMode === 'auto') {
         setPower(true);
-        addLog('👤 Wajah terdeteksi di Webcam Laptop! Kipas otomatis MENYALA (Auto Mode).', 'success');
+        addLog(msg, 'success');
         await updateFanState({
           faceDetected: true,
           lastFaceSeen: nowTime,
           power: true
         });
       } else {
-        addLog('👤 Wajah terdeteksi di Webcam Laptop (Mode Manual aktif).', 'info');
+        addLog(msg.replace('MENYALA (Auto Mode)', '(Mode Manual aktif)'), 'info');
         await updateFanState({
           faceDetected: true,
           lastFaceSeen: nowTime
@@ -187,7 +191,7 @@ export default function App() {
 
       if (currentMode === 'auto') {
         setPower(false);
-        addLog('🚫 Wajah tidak terlihat di Webcam Laptop. Kipas otomatis DIMATIKAN untuk hemat energi.', 'danger');
+        addLog('🚫 Seluruh wajah telah beranjak dari kamera. Kipas otomatis DIMATIKAN untuk hemat energi.', 'danger');
         await updateFanState({
           faceDetected: false,
           power: false

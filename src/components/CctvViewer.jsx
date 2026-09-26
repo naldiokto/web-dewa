@@ -17,9 +17,10 @@ import {
   CheckCircle2,
   AlertCircle,
   RefreshCw,
-  Info
+  Info,
+  Users
 } from 'lucide-react';
-import { detectFace } from '../utils/faceDetection';
+import { detectFaces } from '../utils/faceDetection';
 
 export default function CctvViewer({ 
   streamUrl, 
@@ -42,10 +43,9 @@ export default function CctvViewer({
   const [cameraSource, setCameraSource] = useState(activeSource);
   const [webcamActive, setWebcamActive] = useState(false);
   const [webcamError, setWebcamError] = useState(null);
-  const [localDetectedBox, setLocalDetectedBox] = useState(null);
+  const [detectedFaces, setDetectedFaces] = useState([]); // Array of { id, xPercent, yPercent, wPercent, hPercent, confidence }
   const [detectionEngine, setDetectionEngine] = useState('');
   const [sensitivityMode, setSensitivityMode] = useState('high'); // 'high' | 'normal'
-  const [confidenceScore, setConfidenceScore] = useState(0);
 
   const containerRef = useRef(null);
   const videoRef = useRef(null);
@@ -128,7 +128,7 @@ export default function CctvViewer({
       videoRef.current.srcObject = null;
     }
     setWebcamActive(false);
-    setLocalDetectedBox(null);
+    setDetectedFaces([]);
   };
 
   const startFaceDetectionLoop = () => {
@@ -137,7 +137,7 @@ export default function CctvViewer({
     detectionIntervalRef.current = setInterval(async () => {
       if (!videoRef.current || videoRef.current.readyState < 2) return;
 
-      const result = await detectFace(
+      const result = await detectFaces(
         videoRef.current, 
         offscreenCanvasRef.current,
         { sensitivity: sensitivityMode }
@@ -145,21 +145,19 @@ export default function CctvViewer({
 
       if (result.method) setDetectionEngine(result.method);
 
-      if (result.detected) {
+      if (result.detected && result.faces && result.faces.length > 0) {
         absentCountRef.current = 0;
-        setConfidenceScore(result.confidence || 90);
-        setLocalDetectedBox(result.box);
+        setDetectedFaces(result.faces);
         if (onWebcamFaceChange) {
-          onWebcamFaceChange(true);
+          onWebcamFaceChange(true, result.facesCount);
         }
       } else {
         absentCountRef.current += 1;
-        // Require 4 consecutive non-detections (~800ms) to prevent flicker
+        // Require 4 consecutive non-detections (~720ms) to prevent flicker
         if (absentCountRef.current >= 4) {
-          setConfidenceScore(0);
-          setLocalDetectedBox(null);
+          setDetectedFaces([]);
           if (onWebcamFaceChange) {
-            onWebcamFaceChange(false);
+            onWebcamFaceChange(false, 0);
           }
         }
       }
@@ -512,37 +510,49 @@ export default function CctvViewer({
             <div className="flex items-center justify-between text-[11px] font-mono">
               <div className="flex items-center gap-1.5 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10">
                 <span className={`w-2 h-2 rounded-full ${faceDetected ? 'bg-emerald-400 animate-ping' : 'bg-teal-400'}`}></span>
-                <span>AI VISION: FACE_DETECTOR</span>
+                <span>
+                  {detectedFaces.length > 1 
+                    ? `AI VISION: ${detectedFaces.length} WAJAH TERKUNCI (MULTI-TARGET)` 
+                    : detectedFaces.length === 1 
+                      ? 'AI VISION: 1 WAJAH TERKUNCI' 
+                      : 'AI VISION: MENCARI TARGET WAJAH...'}
+                </span>
               </div>
               <div className="bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-slate-300">
                 {new Date().toLocaleTimeString('id-ID')}
               </div>
             </div>
 
-            {/* Dynamic Face Target Bounding Box */}
-            {faceDetected && localDetectedBox ? (
-              <div 
-                className="absolute rounded-xl border-2 border-emerald-400 shadow-[0_0_35px_rgba(52,211,153,0.6)] bg-emerald-500/15 flex items-center justify-center transition-all duration-150 pointer-events-none"
-                style={{
-                  left: `${localDetectedBox.xPercent}%`,
-                  top: `${localDetectedBox.yPercent}%`,
-                  width: `${localDetectedBox.wPercent}%`,
-                  height: `${localDetectedBox.hPercent}%`
-                }}
-              >
-                {/* Corner reticles */}
-                <div className="absolute -top-1 -left-1 w-3.5 h-3.5 border-t-2 border-l-2 border-teal-300" />
-                <div className="absolute -top-1 -right-1 w-3.5 h-3.5 border-t-2 border-r-2 border-teal-300" />
-                <div className="absolute -bottom-1 -left-1 w-3.5 h-3.5 border-b-2 border-l-2 border-teal-300" />
-                <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 border-b-2 border-r-2 border-teal-300" />
+            {/* Dynamic Multi-Face Target Bounding Boxes */}
+            {detectedFaces && detectedFaces.length > 0 ? (
+              <>
+                {detectedFaces.map((face) => (
+                  <div 
+                    key={face.id}
+                    className="absolute rounded-xl border-2 border-emerald-400 shadow-[0_0_30px_rgba(52,211,153,0.6)] bg-emerald-500/15 flex items-center justify-center transition-all duration-150 pointer-events-none"
+                    style={{
+                      left: `${face.xPercent}%`,
+                      top: `${face.yPercent}%`,
+                      width: `${face.wPercent}%`,
+                      height: `${face.hPercent}%`
+                    }}
+                  >
+                    {/* Corner reticles */}
+                    <div className="absolute -top-1 -left-1 w-3.5 h-3.5 border-t-2 border-l-2 border-teal-300" />
+                    <div className="absolute -top-1 -right-1 w-3.5 h-3.5 border-t-2 border-r-2 border-teal-300" />
+                    <div className="absolute -bottom-1 -left-1 w-3.5 h-3.5 border-b-2 border-l-2 border-teal-300" />
+                    <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 border-b-2 border-r-2 border-teal-300" />
 
-                <div className="bg-emerald-500/90 backdrop-blur-md text-slate-950 px-3 py-1 rounded-full text-[11px] font-extrabold tracking-wide flex items-center gap-1.5 shadow-xl animate-pulse">
-                  <ScanFace className="w-3.5 h-3.5" />
-                  <span>TARGET LOCKED ({confidenceScore}%)</span>
-                </div>
-              </div>
+                    {/* Floating identification badge */}
+                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-emerald-500/90 backdrop-blur-md text-slate-950 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wide flex items-center gap-1 shadow-xl whitespace-nowrap">
+                      <ScanFace className="w-3 h-3" />
+                      <span>WAJAH #{face.id} ({face.confidence}%)</span>
+                    </div>
+                  </div>
+                ))}
+              </>
             ) : faceDetected ? (
-              /* Face detected fallback box */
+              /* Single Fallback Box */
               <div className="relative flex items-center justify-center">
                 <div className="w-48 h-52 sm:w-60 sm:h-64 rounded-xl border-2 border-emerald-400 shadow-[0_0_35px_rgba(52,211,153,0.6)] bg-emerald-500/15 flex items-center justify-center transition-all duration-300">
                   <div className="absolute -top-1 -left-1 w-3.5 h-3.5 border-t-2 border-l-2 border-teal-300" />
@@ -574,7 +584,7 @@ export default function CctvViewer({
             {/* Bottom HUD info */}
             <div className="flex items-center justify-between text-[11px] font-mono">
               <div className="bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-slate-300">
-                STATUS: {faceDetected ? 'WAJAH AKTIF (KIPAS ON)' : 'SIAGA (STANDBY)'}
+                STATUS: {faceDetected ? `${detectedFaces.length > 0 ? detectedFaces.length : 1} WAJAH AKTIF (KIPAS ON)` : 'SIAGA (STANDBY)'}
               </div>
               <div className="bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-slate-400">
                 SRC: {cameraSource.toUpperCase()}
