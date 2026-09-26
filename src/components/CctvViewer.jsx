@@ -529,7 +529,7 @@ export default function CctvViewer({
                 {detectedFaces.map((face) => (
                   <div 
                     key={face.id}
-                    className="absolute rounded-xl border-2 border-emerald-400 shadow-[0_0_30px_rgba(52,211,153,0.6)] bg-emerald-500/15 flex items-center justify-center transition-all duration-150 pointer-events-none"
+                    className="absolute rounded-lg border-2 border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.5)] bg-emerald-500/10 flex items-center justify-center transition-all duration-150 pointer-events-none"
                     style={{
                       left: `${face.xPercent}%`,
                       top: `${face.yPercent}%`,
@@ -537,16 +537,16 @@ export default function CctvViewer({
                       height: `${face.hPercent}%`
                     }}
                   >
-                    {/* Corner reticles */}
-                    <div className="absolute -top-1 -left-1 w-3.5 h-3.5 border-t-2 border-l-2 border-teal-300" />
-                    <div className="absolute -top-1 -right-1 w-3.5 h-3.5 border-t-2 border-r-2 border-teal-300" />
-                    <div className="absolute -bottom-1 -left-1 w-3.5 h-3.5 border-b-2 border-l-2 border-teal-300" />
-                    <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 border-b-2 border-r-2 border-teal-300" />
+                    {/* Precision Corner Reticles */}
+                    <div className="absolute -top-0.5 -left-0.5 w-3 h-3 border-t-2 border-l-2 border-emerald-300" />
+                    <div className="absolute -top-0.5 -right-0.5 w-3 h-3 border-t-2 border-r-2 border-emerald-300" />
+                    <div className="absolute -bottom-0.5 -left-0.5 w-3 h-3 border-b-2 border-l-2 border-emerald-300" />
+                    <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 border-b-2 border-r-2 border-emerald-300" />
 
                     {/* Floating identification badge */}
-                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-emerald-500/90 backdrop-blur-md text-slate-950 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wide flex items-center gap-1 shadow-xl whitespace-nowrap">
+                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-emerald-500 text-slate-950 px-2 py-0.5 rounded text-[10px] font-black tracking-wide flex items-center gap-1 shadow-lg whitespace-nowrap">
                       <ScanFace className="w-3 h-3" />
-                      <span>WAJAH #{face.id} ({face.confidence}%)</span>
+                      <span>WAJAH #{face.id}</span>
                     </div>
                   </div>
                 ))}
