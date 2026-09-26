@@ -1,210 +1,178 @@
 /**
- * Multi-Face Detection Engine for Webcam Demo
- * Supports simultaneously tracking multiple faces / people in frame
- * Uses YCbCr Universal Chrominance & Spatial Connected Clustering
+ * Face Detection Engine — Google MediaPipe Vision (BlazeFace ML)
+ * 
+ * Replaces the old YCbCr skin-tone detector with a proper ML model.
+ * - Accurate: detects only real human faces, ignores walls/objects
+ * - Multi-face: tracks every face in frame simultaneously
+ * - Real-time: GPU-accelerated, runs at 30+ FPS
+ * - Tracking: bounding boxes follow face movement smoothly
+ * 
+ * Primary:  MediaPipe Vision FaceDetector (GPU-accelerated ML)
+ * Fallback: Native Browser FaceDetector API (Chrome experimental)
  */
 
-function isHumanSkin(r, g, b) {
-  // YCbCr transformation
-  const cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 128;
-  const cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 128;
+import { FaceDetector, FilesetResolver } from '@mediapipe/tasks-vision';
 
-  // Broad skin cluster boundaries (covers Asian, Indonesian, Caucasian, African)
-  const ycbcrMatch = cb >= 73 && cb <= 138 && cr >= 125 && cr <= 182;
-  const rgbMatch = r > 40 && g > 25 && b > 15 && (r > b || Math.abs(r - b) < 25);
+let faceDetector = null;
+let initPromise = null;
+let lastTimestamp = -1;
+let mediapipeFailed = false;
 
-  return ycbcrMatch && rgbMatch;
+// ─── Model Initialization (lazy singleton) ───────────────────────────
+
+async function initDetector() {
+  if (faceDetector) return faceDetector;
+  if (initPromise) return initPromise;
+
+  initPromise = (async () => {
+    try {
+      console.log('[FaceDetect] ⏳ Loading MediaPipe Vision WASM runtime...');
+
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+
+      console.log('[FaceDetect] ⏳ Downloading BlazeFace ML model...');
+
+      faceDetector = await FaceDetector.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        minDetectionConfidence: 0.3,
+      });
+
+      console.log('[FaceDetect] ✅ MediaPipe Face Detector ready!');
+      return faceDetector;
+    } catch (err) {
+      console.warn('[FaceDetect] ❌ MediaPipe failed:', err.message);
+      mediapipeFailed = true;
+      initPromise = null;
+      return null;
+    }
+  })();
+
+  return initPromise;
 }
 
+// ─── Native Browser FaceDetector fallback ─────────────────────────────
+
+async function detectWithNativeAPI(video, vW, vH) {
+  if (typeof window === 'undefined' || !('FaceDetector' in window)) return null;
+
+  try {
+    const detector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 10 });
+    const rawFaces = await detector.detect(video);
+
+    if (!rawFaces || rawFaces.length === 0) return null;
+
+    const faces = rawFaces.map((f, i) => {
+      const bb = f.boundingBox;
+      // Mirror X for CSS scaleX(-1) webcam
+      const mirroredX = vW - bb.x - bb.width;
+
+      return {
+        id: i + 1,
+        xPercent: clamp((mirroredX / vW) * 100, 0, 98),
+        yPercent: clamp((bb.y / vH) * 100, 0, 98),
+        wPercent: clamp((bb.width / vW) * 100, 3, 50),
+        hPercent: clamp((bb.height / vH) * 100, 3, 60),
+        confidence: 92,
+      };
+    });
+
+    return {
+      detected: true,
+      facesCount: faces.length,
+      faces,
+      method: 'native-api',
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Main Detection Entry Point ───────────────────────────────────────
+
 /**
- * Detect ALL faces in video frame
- * @param {HTMLVideoElement} video 
- * @param {HTMLCanvasElement} offscreenCanvas 
+ * Detect ALL faces in a video frame.
+ *
+ * @param {HTMLVideoElement} video
+ * @param {HTMLCanvasElement} offscreenCanvas — unused (kept for API compat)
  * @param {Object} options
- * @returns {Promise<{ detected: boolean, facesCount: number, faces: Array<{ id: number, xPercent: number, yPercent: number, wPercent: number, hPercent: number, confidence: number }>, method: string }>}
+ * @returns {Promise<{ detected: boolean, facesCount: number, faces: Array, method: string }>}
  */
 export async function detectFaces(video, offscreenCanvas, options = {}) {
   if (!video || video.readyState < 2 || video.paused || video.ended) {
     return { detected: false, facesCount: 0, faces: [], method: 'idle' };
   }
 
-  // 1. Try Native Browser FaceDetector if supported (e.g. Chrome with experimental flags)
-  if (typeof window !== 'undefined' && 'FaceDetector' in window) {
-    try {
-      const nativeDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 10 });
-      const rawFaces = await nativeDetector.detect(video);
-      if (rawFaces && rawFaces.length > 0) {
-        const vW = video.videoWidth || 640;
-        const vH = video.videoHeight || 480;
+  const vW = video.videoWidth || 640;
+  const vH = video.videoHeight || 480;
 
-        const faces = rawFaces.map((f, i) => {
-          const bb = f.boundingBox;
+  // ── Strategy 1: MediaPipe Vision (ML) ──
+  if (!mediapipeFailed) {
+    let detector;
+    try {
+      detector = await initDetector();
+    } catch {
+      // fall through to native
+    }
+
+    if (detector) {
+      // Ensure monotonically increasing timestamp for VIDEO mode
+      let nowMs = performance.now();
+      if (nowMs <= lastTimestamp) nowMs = lastTimestamp + 1;
+      lastTimestamp = nowMs;
+
+      let result;
+      try {
+        result = detector.detectForVideo(video, nowMs);
+      } catch (err) {
+        console.warn('[FaceDetect] detectForVideo error:', err);
+        return { detected: false, facesCount: 0, faces: [], method: 'error' };
+      }
+
+      const faces = (result.detections || [])
+        .filter((det) => det.boundingBox)
+        .map((det, i) => {
+          const bb = det.boundingBox;
+          // Mirror X because webcam video uses CSS transform scaleX(-1)
+          const mirroredX = vW - bb.originX - bb.width;
+
           return {
             id: i + 1,
-            xPercent: Math.max(2, Math.min(95, (bb.x / vW) * 100)),
-            yPercent: Math.max(2, Math.min(95, (bb.y / vH) * 100)),
-            wPercent: Math.min(90, (bb.width / vW) * 100),
-            hPercent: Math.min(90, (bb.height / vH) * 100),
-            confidence: 96
+            xPercent: clamp((mirroredX / vW) * 100, 0, 98),
+            yPercent: clamp((bb.originY / vH) * 100, 0, 98),
+            wPercent: clamp((bb.width / vW) * 100, 3, 50),
+            hPercent: clamp((bb.height / vH) * 100, 3, 60),
+            confidence: Math.round((det.categories?.[0]?.score || 0) * 100),
           };
         });
 
-        return {
-          detected: true,
-          facesCount: faces.length,
-          faces,
-          method: 'native-api'
-        };
-      }
-    } catch (e) {
-      // Fall through to canvas multi-cluster detector
+      return {
+        detected: faces.length > 0,
+        facesCount: faces.length,
+        faces,
+        method: 'mediapipe-blazeface',
+      };
     }
   }
 
-  // 2. High-Precision Multi-Cluster Computer Vision Canvas Fallback
-  if (!offscreenCanvas) {
-    return { detected: false, facesCount: 0, faces: [], method: 'none' };
-  }
+  // ── Strategy 2: Native Browser FaceDetector (Chrome) ──
+  const nativeResult = await detectWithNativeAPI(video, vW, vH);
+  if (nativeResult) return nativeResult;
 
-  const ctx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return { detected: false, facesCount: 0, faces: [], method: 'none' };
+  // ── No engine available ──
+  return { detected: false, facesCount: 0, faces: [], method: 'no-engine' };
+}
 
-  const sampleW = 120;
-  const sampleH = 90;
-  offscreenCanvas.width = sampleW;
-  offscreenCanvas.height = sampleH;
+// ─── Utility ──────────────────────────────────────────────────────────
 
-  ctx.drawImage(video, 0, 0, sampleW, sampleH);
-  let imgData;
-  try {
-    imgData = ctx.getImageData(0, 0, sampleW, sampleH);
-  } catch (err) {
-    return { detected: false, facesCount: 0, faces: [], method: 'error' };
-  }
-
-  const data = imgData.data;
-  const histX = new Int32Array(sampleW);
-  const skinGrid = new Uint8Array(sampleW * sampleH);
-
-  // Scan frame and build horizontal spatial profile
-  for (let y = 4; y < sampleH - 4; y += 2) {
-    for (let x = 4; x < sampleW - 4; x += 2) {
-      const idx = (y * sampleW + x) * 4;
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
-
-      if (isHumanSkin(r, g, b)) {
-        histX[x]++;
-        skinGrid[y * sampleW + x] = 1;
-      }
-    }
-  }
-
-  // Segment horizontal profile into individual person clusters
-  // A valley (gap between two people) is where skin pixels drop below threshold
-  const peakThreshold = options.sensitivity === 'high' ? 2 : 4;
-  const regions = [];
-  let inRegion = false;
-  let regionStart = 0;
-  let valleyCount = 0;
-
-  for (let x = 4; x < sampleW - 4; x++) {
-    if (histX[x] >= peakThreshold) {
-      if (!inRegion) {
-        inRegion = true;
-        regionStart = x;
-        valleyCount = 0;
-      } else {
-        valleyCount = 0;
-      }
-    } else {
-      if (inRegion) {
-        valleyCount++;
-        // If valley continues for 5 pixels, close this person's region
-        if (valleyCount >= 5 || x === sampleW - 5) {
-          inRegion = false;
-          const regionEnd = x - valleyCount;
-          if (regionEnd - regionStart >= 8) {
-            regions.push({ startX: regionStart, endX: regionEnd });
-          }
-        }
-      }
-    }
-  }
-
-  if (inRegion) {
-    regions.push({ startX: regionStart, endX: sampleW - 5 });
-  }
-
-  // For each segmented region, calculate bounding box of the individual face
-  const detectedFaces = [];
-  const minPixelsPerFace = options.sensitivity === 'high' ? 18 : 25;
-
-  regions.forEach((reg, index) => {
-    let count = 0;
-    let sumX = 0;
-    let sumY = 0;
-    let minX = reg.endX;
-    let maxX = reg.startX;
-    let minY = sampleH;
-    let maxY = 0;
-
-    // 1. Scan the region to find person boundaries and head position (minY)
-    for (let y = 4; y < sampleH - 4; y += 2) {
-      for (let x = reg.startX; x <= reg.endX; x += 2) {
-        if (skinGrid[y * sampleW + x] === 1) {
-          count++;
-          sumX += x;
-          sumY += y;
-
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-
-    // 2. If valid person detected, create a tight face box (forehead to chin, ignoring uniform shirt)
-    if (count >= minPixelsPerFace && minY < sampleH - 10) {
-      const faceCenterX = sumX / count;
-
-      // Realistic face width (cheek to cheek)
-      const measuredW = maxX - minX;
-      const faceW = Math.max(16, Math.min(30, measuredW * 0.92));
-
-      // Golden ratio human face height (forehead to chin = 1.25x width)
-      const faceH = faceW * 1.25;
-
-      // Face top starts at the detected top of head/forehead (minY)
-      const top = Math.max(1, Math.min(sampleH - faceH - 1, minY));
-      const left = Math.max(1, Math.min(sampleW - faceW - 1, faceCenterX - faceW / 2));
-
-      const xPercent = (left / sampleW) * 100;
-      const yPercent = (top / sampleH) * 100;
-      const wPercent = (faceW / sampleW) * 100;
-      const hPercent = (faceH / sampleH) * 100;
-
-      const confidence = Math.min(99, Math.round(80 + (count / 120) * 19));
-
-      detectedFaces.push({
-        id: index + 1,
-        xPercent,
-        yPercent,
-        wPercent,
-        hPercent,
-        confidence
-      });
-    }
-  });
-
-  return {
-    detected: detectedFaces.length > 0,
-    facesCount: detectedFaces.length,
-    faces: detectedFaces,
-    method: 'multi-cluster-ycbcr'
-  };
+function clamp(val, min, max) {
+  return Math.max(min, Math.min(max, val));
 }
 
 // Backward-compatible alias

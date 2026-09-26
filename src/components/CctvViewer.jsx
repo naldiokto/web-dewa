@@ -46,6 +46,7 @@ export default function CctvViewer({
   const [detectedFaces, setDetectedFaces] = useState([]); // Array of { id, xPercent, yPercent, wPercent, hPercent, confidence }
   const [detectionEngine, setDetectionEngine] = useState('');
   const [sensitivityMode, setSensitivityMode] = useState('high'); // 'high' | 'normal'
+  const [modelLoading, setModelLoading] = useState(true); // ML model loading state
 
   const containerRef = useRef(null);
   const videoRef = useRef(null);
@@ -134,6 +135,7 @@ export default function CctvViewer({
   const startFaceDetectionLoop = () => {
     if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current);
 
+    // Faster interval (120ms ≈ 8fps) for smoother real-time tracking with MediaPipe ML
     detectionIntervalRef.current = setInterval(async () => {
       if (!videoRef.current || videoRef.current.readyState < 2) return;
 
@@ -143,7 +145,13 @@ export default function CctvViewer({
         { sensitivity: sensitivityMode }
       );
 
-      if (result.method) setDetectionEngine(result.method);
+      if (result.method) {
+        setDetectionEngine(result.method);
+        // Model is loaded once we get a real engine response (not 'idle' or 'loading')
+        if (result.method !== 'idle' && result.method !== 'loading') {
+          setModelLoading(false);
+        }
+      }
 
       if (result.detected && result.faces && result.faces.length > 0) {
         absentCountRef.current = 0;
@@ -153,15 +161,15 @@ export default function CctvViewer({
         }
       } else {
         absentCountRef.current += 1;
-        // Require 4 consecutive non-detections (~720ms) to prevent flicker
-        if (absentCountRef.current >= 4) {
+        // Require 3 consecutive non-detections (~360ms) to prevent flicker
+        if (absentCountRef.current >= 3) {
           setDetectedFaces([]);
           if (onWebcamFaceChange) {
             onWebcamFaceChange(false, 0);
           }
         }
       }
-    }, 180);
+    }, 120);
   };
 
   const handleSwitchSource = (newSource) => {
@@ -373,7 +381,10 @@ export default function CctvViewer({
               </button>
 
               <span className="text-teal-400 hidden lg:inline">
-                {detectionEngine === 'native-api' ? 'Native API' : 'YCbCr Cluster'}
+                {detectionEngine === 'native-api' ? 'Native API' 
+                  : detectionEngine === 'mediapipe-blazeface' ? '🧠 MediaPipe ML' 
+                  : detectionEngine === 'loading' ? '⏳ Loading...'
+                  : detectionEngine || 'Initializing...'}
               </span>
             </>
           )}
@@ -509,13 +520,15 @@ export default function CctvViewer({
             {/* Top HUD info */}
             <div className="flex items-center justify-between text-[11px] font-mono">
               <div className="flex items-center gap-1.5 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10">
-                <span className={`w-2 h-2 rounded-full ${faceDetected ? 'bg-emerald-400 animate-ping' : 'bg-teal-400'}`}></span>
+                <span className={`w-2 h-2 rounded-full ${modelLoading ? 'bg-amber-400 animate-pulse' : faceDetected ? 'bg-emerald-400 animate-ping' : 'bg-teal-400'}`}></span>
                 <span>
-                  {detectedFaces.length > 1 
-                    ? `AI VISION: ${detectedFaces.length} WAJAH TERKUNCI (MULTI-TARGET)` 
-                    : detectedFaces.length === 1 
-                      ? 'AI VISION: 1 WAJAH TERKUNCI' 
-                      : 'AI VISION: MENCARI TARGET WAJAH...'}
+                  {modelLoading
+                    ? 'AI VISION: ⏳ LOADING ML MODEL...'
+                    : detectedFaces.length > 1 
+                      ? `AI VISION: ${detectedFaces.length} WAJAH TERKUNCI (MULTI-TARGET)` 
+                      : detectedFaces.length === 1 
+                        ? 'AI VISION: 1 WAJAH TERKUNCI' 
+                        : 'AI VISION: MENCARI TARGET WAJAH...'}
                 </span>
               </div>
               <div className="bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-slate-300">
@@ -529,7 +542,7 @@ export default function CctvViewer({
                 {detectedFaces.map((face) => (
                   <div 
                     key={face.id}
-                    className="absolute rounded-lg border-2 border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.5)] bg-emerald-500/10 flex items-center justify-center transition-all duration-150 pointer-events-none"
+                    className="absolute rounded-lg border-2 border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.5)] bg-emerald-500/10 flex items-center justify-center transition-all duration-200 ease-out pointer-events-none"
                     style={{
                       left: `${face.xPercent}%`,
                       top: `${face.yPercent}%`,
