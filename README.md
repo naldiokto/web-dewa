@@ -68,9 +68,40 @@ Android Studio akan terbuka dan Anda bisa langsung klik **Build APK**.
 
 ---
 
+---
+
+## 💻 Mode Demo Webcam Laptop (Sebelum Hardware Tiba)
+
+Aplikasi ini sudah dilengkapi **Mode Demo Interaktif** yang memanfaatkan **Webcam Laptop Anda**:
+- Tidak perlu menunggu kiriman paket tiba untuk menguji logika otomatisasi kipas.
+- Browser akan meminta izin kamera laptop, lalu mendeteksi wajah Anda secara real-time.
+- Saat wajah Anda muncul di depan webcam, status Firebase akan otomatis berubah dan kipas akan menyala (Auto Mode).
+
+---
+
+## 🔄 Cara Mengembalikan Sistem ke Mode ESP32-CAM (Saat Hardware Tiba)
+
+**PENTING: Tidak ada kode program yang perlu Anda hapus atau ubah!**
+
+Ketika paket modul ESP32-CAM, Arduino, dan Relay Anda sudah sampai, ikuti 3 langkah mudah ini:
+
+1. **Ganti Sumber Kamera di Web:**
+   - Pada bagian atas kotak video CCTV di web, klik tombol tab **`[ 📡 ESP32-CAM (Hardware) ]`**.
+   - Webcam laptop akan otomatis berhenti dan mati.
+2. **Masukkan URL Kamera ESP32:**
+   - Klik ikon ⚙️ Pengaturan di pojok kanan atas video.
+   - Masukkan alamat IP lokal WiFi ESP32 Anda (misalnya: `http://192.168.1.15:81/stream`) atau link Ngrok/Cloudflare jika ingin diakses dari luar rumah.
+   - Klik **"Simpan & Aktifkan ESP32"**.
+3. **Flash Kode Arduino:**
+   - Buka tombol **"Panduan Alat"** di navbar web, salin kode C++ Arduino yang disediakan ke Arduino IDE, lalu upload ke modul ESP32-CAM Anda.
+4. **Selesai!** Sistem sekarang 100% membaca sensor wajah fisik dari ESP32-CAM di badan kipas dan mengontrol relay secara mandiri.
+
+---
+
 ## 🛠️ Panduan Hardware (ESP32-CAM + Relay + Arduino)
 
 Skema perkabelan dan kode program lengkap (`.ino`) sudah tersedia langsung di dalam aplikasi web. Klik tombol **"Panduan Alat"** pada bagian atas web untuk melihat:
 - Pinout koneksi kabel ESP32-CAM ke Relay dan Kipas.
 - Kode Arduino C++ lengkap siap upload.
 - Cara setup tunnel Ngrok / Cloudflare agar CCTV bisa dilihat saat bepergian ke luar rumah.
+
